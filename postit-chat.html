@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>虛擬標籤對話系統</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #api-settings {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+        }
+        #api-settings input, #api-settings select {
+            margin: 5px 0;
+            width: 200px;
+        }
+        #canvas {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background-color: #f0f0f0;
+            padding-top: 80px; /* 避免畫布內容被 API 設置擋住 */
+        }
+        .note {
+            position: absolute;
+            width: 300px; /* 正方形寬度 */
+            height: 300px; /* 正方形高度 */
+            padding: 10px;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+            cursor: move;
+            resize: both;
+            overflow: hidden;
+            background-color: white;
+            border: 2px solid transparent;
+            transition: border 0.2s ease;
+            display: flex;
+            flex-direction: column;
+        }
+        .note.editing {
+            border: 2px solid #4CAF50;
+        }
+        .note .chat-log {
+            flex: 1;
+            overflow-y: auto;
+            border-bottom: 1px solid #ddd;
+            padding: 5px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .note .chat-input {
+            width: 100%;
+            padding: 5px;
+            border: 1px solid #ddd;
+            outline: none;
+        }
+        .note .close-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            color: #000;
+        }
+        #add-note-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 24px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+        }
+    </style>
+    <!-- 引入 marked 函式庫 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div id="api-settings">
+        <input type="text" id="api-url" placeholder="API 網址">
+        <input type="text" id="api-key" placeholder="API 金鑰">
+        <select id="model-select"></select>
+    </div>
+    <div id="canvas"></div>
+    <button id="add-note-btn" onclick="addNote()">+</button>
+
+    <script>
+        let maxZIndex = 1; // 用於追蹤最大的 z-index
+        let models = []; // 儲存模型清單
+
+        function getRandomColor() {
+            const colors = ['#FFCCCC', '#FFE5CC', '#FFFFCC', '#E5FFCC', '#CCFFCC', '#CCFFE5', '#CCFFFF', '#CCE5FF', '#CCCCFF', '#E5CCFF', '#FFCCFF', '#FFCCE5'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        function addNote() {
+            const canvas = document.getElementById('canvas');
+            const note = document.createElement('div');
+            const noteId = `note-${Date.now()}`; // 生成唯一碼
+            note.className = 'note';
+            note.dataset.id = noteId;
+            note.style.backgroundColor = getRandomColor();
+            note.innerHTML = `
+                <div class="chat-log"></div>
+                <input type="text" class="chat-input" placeholder="輸入訊息..." onkeypress="handleKeyPress(event, '${noteId}')">
+                <span class="close-btn" onclick="deleteNote(this)">×</span>
+            `;
+            canvas.appendChild(note);
+            makeDraggable(note);
+            bringToFront(note); // 新增的標籤紙自動置頂
+            loadNoteContent(noteId); // 載入對話紀錄
+            saveNotes(); // 儲存標籤紙
+        }
+
+        function deleteNote(closeBtn) {
+            const note = closeBtn.parentElement;
+            const noteId = note.dataset.id;
+            
+            // 刪除對話紀錄
+            localStorage.removeItem(`note-${noteId}-messages`);
+            
+            // 刪除標籤紙
+            note.remove();
+            
+            // 更新並儲存剩餘的標籤紙
+            saveNotes();
+        }
+
+        function makeDraggable(element) {
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+            element.onmousedown = dragMouseDown;
+
+            function dragMouseDown(e) {
+                if (e.target.tagName !== 'INPUT') {
+                    e.preventDefault();
+                    pos3 = e.clientX;
+                    pos4 = e.clientY;
+                    document.onmouseup = closeDragElement;
+                    document.onmousemove = elementDrag;
+                    bringToFront(element); // 拖動時將標籤紙置頂
+                }
+            }
+
+            function elementDrag(e) {
+                e = e || window.event;
+                e.preventDefault();
+                pos1 = pos3 - e.clientX;
+                pos2 = pos4 - e.clientY;
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                element.style.top = (element.offsetTop - pos2) + "px";
+                element.style.left = (element.offsetLeft - pos1) + "px";
+            }
+
+            function closeDragElement() {
+                document.onmouseup = null;
+                document.onmousemove = null;
+            }
+        }
+
+        function bringToFront(element) {
+            maxZIndex += 1; // 增加 z-index
+            element.style.zIndex = maxZIndex; // 設置新的 z-index
+        }
+
+        function saveNotes() {
+            const notes = [];
+            document.querySelectorAll('.note').forEach(note => {
+                const noteId = note.dataset.id;
+                const messages = JSON.parse(note.dataset.messages || '[]'); // 從 dataset 中獲取 JSON 格式的對話紀錄
+                notes.push({
+                    id: noteId,
+                    top: note.style.top,
+                    left: note.style.left,
+                    backgroundColor: note.style.backgroundColor,
+                    messages: messages // 以 JSON 格式儲存對話紀錄
+                });
+                // 將對話紀錄獨立存儲
+                localStorage.setItem(`note-${noteId}-messages`, JSON.stringify(messages));
+            });
+            localStorage.setItem('notes', JSON.stringify(notes));
+        }
+
+        function loadNotes() {
+            const notes = JSON.parse(localStorage.getItem('notes')) || [];
+            notes.forEach(note => {
+                const canvas = document.getElementById('canvas');
+                const newNote = document.createElement('div');
+                newNote.className = 'note';
+                newNote.dataset.id = note.id;
+                newNote.dataset.messages = JSON.stringify(note.messages); // 將 JSON 格式的對話紀錄存儲在 dataset 中
+                newNote.style.top = note.top;
+                newNote.style.left = note.left;
+                newNote.style.backgroundColor = note.backgroundColor;
+                newNote.innerHTML = `
+                    <div class="chat-log"></div>
+                    <input type="text" class="chat-input" placeholder="輸入訊息..." onkeypress="handleKeyPress(event, '${note.id}')">
+                    <span class="close-btn" onclick="deleteNote(this)">×</span>
+                `;
+                canvas.appendChild(newNote);
+                makeDraggable(newNote);
+                bringToFront(newNote);
+                loadNoteContent(note.id); // 載入對話紀錄
+            });
+        }
+
+        function loadNoteContent(noteId) {
+            // 從本地儲存中獲取對話紀錄
+            const messages = JSON.parse(localStorage.getItem(`note-${noteId}-messages`)) || [];
+            // 獲取對應的標籤紙元素
+            const note = document.querySelector(`.note[data-id="${noteId}"]`);
+            if (note) {
+                // 獲取對話紀錄顯示區域
+                const chatLog = note.querySelector('.chat-log');
+                // 將對話紀錄轉換為 HTML 並顯示
+                chatLog.innerHTML = messages.map(message => {
+                    const prefix = message.role === 'user' ? '你:' : 'AI:';
+                    // 使用 marked 將 Markdown 轉換為 HTML
+                    return `<div>${prefix} ${marked.parse(message.content)}</div>`;
+                }).join('');
+            }
+        }
+
+        function handleKeyPress(event, noteId) {
+            if (event.key === 'Enter') {
+                sendMessage(noteId);
+            }
+        }
+
+        function sendMessage(noteId) {
+            const note = document.querySelector(`.note[data-id="${noteId}"]`);
+            const input = note.querySelector('.chat-input');
+            const message = input.value;
+            if (message.trim() === '') return;
+
+            // 獲取當前對話紀錄
+            const messages = JSON.parse(note.dataset.messages || '[]');
+            messages.push({ role: 'user', content: message }); // 將用戶輸入加入對話紀錄
+            note.dataset.messages = JSON.stringify(messages); // 更新 dataset 中的對話紀錄
+
+            const chatLog = note.querySelector('.chat-log');
+            // 將用戶輸入的訊息顯示在對話紀錄中，並使用 marked 轉換 Markdown
+            chatLog.innerHTML += `<div><strong>你:</strong> ${marked.parse(message)}</div>`;
+            input.value = '';
+
+            const apiUrl = document.getElementById('api-url').value;
+            const apiKey = document.getElementById('api-key').value;
+            const model = document.getElementById('model-select').value;
+
+            if (!apiUrl || !apiKey || !model) {
+                alert('請先設置 API 網址、金鑰和選擇模型');
+                return;
+            }
+
+            fetch(`${apiUrl}/v1/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: model,
+                    messages: messages, // 使用 JSON 格式的對話紀錄
+                    stream: true
+                })
+            })
+            .then(response => {
+                const reader = response.body.getReader();
+                let partialMessage = '';
+
+                function read() {
+                    return reader.read().then(({ done, value }) => {
+                        if (done) {
+                            messages.push({ role: 'assistant', content: partialMessage }); // 將 AI 回應加入對話紀錄
+                            note.dataset.messages = JSON.stringify(messages); // 更新 dataset 中的對話紀錄
+                            saveNotes(); // 儲存對話紀錄
+                            return;
+                        }
+
+                        const chunk = new TextDecoder().decode(value);
+                        const lines = chunk.split('\n');
+                        lines.forEach(line => {
+                            if (line.trim() === '' || line.trim() === '[DONE]') return; // 跳過空行和 [DONE]
+                            try {
+                                if (line.startsWith('data: ')) {
+                                    const jsonString = line.replace('data: ', '');
+                                    const data = JSON.parse(jsonString);
+                                    if (data.choices && data.choices[0].delta.content) {
+                                        partialMessage += data.choices[0].delta.content;
+                                        const aiResponseDiv = chatLog.querySelector('.ai-response');
+                                        if (!aiResponseDiv) {
+                                            const newDiv = document.createElement('div');
+                                            newDiv.className = 'ai-response';
+                                            // 使用 marked 轉換 Markdown 並顯示
+                                            newDiv.innerHTML = `<strong>AI:</strong> ${marked.parse(partialMessage)}`;
+                                            chatLog.appendChild(newDiv);
+                                        } else {
+                                            // 使用 marked 轉換 Markdown 並更新內容
+                                            aiResponseDiv.innerHTML = `<strong>AI:</strong> ${marked.parse(partialMessage)}`;
+                                        }
+                                    }
+                                }
+                            } catch (error) {
+                                console.error('JSON 解析錯誤:', error);
+                                console.error('無效的 JSON 數據:', line);
+                            }
+                        });
+                        return read();
+                    });
+                }
+
+                return read();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        function fetchModels() {
+            const apiUrl = document.getElementById('api-url').value;
+            const apiKey = document.getElementById('api-key').value;
+
+            if (!apiUrl || !apiKey) return;
+
+            fetch(`${apiUrl}/v1/models`, {
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                models = data.data;
+                const modelSelect = document.getElementById('model-select');
+                modelSelect.innerHTML = '';
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.id;
+                    option.textContent = model.id;
+                    modelSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        document.getElementById('api-url').addEventListener('input', fetchModels);
+        document.getElementById('api-key').addEventListener('input', fetchModels);
+
+        // 初始化時載入標籤紙
+        loadNotes();
+    </script>
+</body>
+</html>
