@@ -289,6 +289,9 @@
             .then(response => {
                 const reader = response.body.getReader();
                 let partialMessage = '';
+                let currentMessageDiv = document.createElement('div');
+                currentMessageDiv.innerHTML = '<strong>AI:</strong> ';
+                chatLog.appendChild(currentMessageDiv);
 
                 function read() {
                     return reader.read().then(({ done, value }) => {
@@ -297,9 +300,6 @@
                             messages.push({ role: 'assistant', content: partialMessage });
                             note.dataset.messages = JSON.stringify(messages); // 更新 dataset 中的對話紀錄
                             saveNotes(); // 儲存對話紀錄
-
-                            // 一次性顯示完整的 AI 回應
-                            chatLog.innerHTML += `<div><strong>AI:</strong> ${marked.parse(partialMessage)}</div>`;
                             return;
                         }
 
@@ -314,6 +314,7 @@
                                     const data = JSON.parse(jsonString);
                                     if (data.choices && data.choices[0].delta.content) {
                                         partialMessage += data.choices[0].delta.content;
+                                        currentMessageDiv.innerHTML = '<strong>AI:</strong> ' + marked.parse(partialMessage);
                                     }
                                 }
                             } catch (error) {
