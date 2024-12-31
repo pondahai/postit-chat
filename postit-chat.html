@@ -262,10 +262,15 @@
 
             const apiUrl = document.getElementById('api-url').value;
             const apiKey = document.getElementById('api-key').value;
-            const model = document.getElementById('model-select').value;
+            let model = document.getElementById('model-select').value;
 
-            if (!apiUrl || !apiKey || !model) {
-                alert('請先設置 API 網址、金鑰和選擇模型');
+            // 如果模型選擇為空，則使用預設模型 "llama-3.1"
+            if (!model) {
+                model = "llama-3.1";
+            }
+
+            if (!apiUrl || !apiKey) {
+                alert('請先設置 API 網址和金鑰');
                 return;
             }
 
@@ -288,33 +293,27 @@
                 function read() {
                     return reader.read().then(({ done, value }) => {
                         if (done) {
-                            messages.push({ role: 'assistant', content: partialMessage }); // 將 AI 回應加入對話紀錄
+                            // 將 AI 回應加入對話紀錄
+                            messages.push({ role: 'assistant', content: partialMessage });
                             note.dataset.messages = JSON.stringify(messages); // 更新 dataset 中的對話紀錄
                             saveNotes(); // 儲存對話紀錄
+
+                            // 一次性顯示完整的 AI 回應
+                            chatLog.innerHTML += `<div><strong>AI:</strong> ${marked.parse(partialMessage)}</div>`;
                             return;
                         }
 
                         const chunk = new TextDecoder().decode(value);
                         const lines = chunk.split('\n');
                         lines.forEach(line => {
-                            if (line.trim() === '' || line.trim() === '[DONE]') return; // 跳過空行和 [DONE]
+                            if (line.trim() === '') return; // 跳過空行
+                            if (line.trim() === '[DONE]') return; // 跳過 [DONE] 標記
                             try {
                                 if (line.startsWith('data: ')) {
                                     const jsonString = line.replace('data: ', '');
                                     const data = JSON.parse(jsonString);
                                     if (data.choices && data.choices[0].delta.content) {
                                         partialMessage += data.choices[0].delta.content;
-                                        const aiResponseDiv = chatLog.querySelector('.ai-response');
-                                        if (!aiResponseDiv) {
-                                            const newDiv = document.createElement('div');
-                                            newDiv.className = 'ai-response';
-                                            // 使用 marked 轉換 Markdown 並顯示
-                                            newDiv.innerHTML = `<strong>AI:</strong> ${marked.parse(partialMessage)}`;
-                                            chatLog.appendChild(newDiv);
-                                        } else {
-                                            // 使用 marked 轉換 Markdown 並更新內容
-                                            aiResponseDiv.innerHTML = `<strong>AI:</strong> ${marked.parse(partialMessage)}`;
-                                        }
                                     }
                                 }
                             } catch (error) {
@@ -355,6 +354,11 @@
                     option.textContent = model.id;
                     modelSelect.appendChild(option);
                 });
+
+                // 如果模型選擇為空，則預設選擇 "llama-3.1"
+                if (!modelSelect.value) {
+                    modelSelect.value = "llama-3.1";
+                }
             })
             .catch(error => {
                 console.error('Error:', error);
